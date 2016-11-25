@@ -19,7 +19,7 @@
 ----------------
 
 *Comety* is a simple toolkit for building web applications that
-can promply react to events occuring on the server using a technique
+can promptly react to server-side events using a technique
 called Comet_.
 
 Comet_ is a web programming model that allows a web server to
@@ -82,8 +82,6 @@ Core dependencies
 | | https://github.com/StanLivitski/python-runtime          |               |
 +-----------------------------------------------------------+---------------+
 
-.. _Django: 
-
 Django apps' dependencies
 '''''''''''''''''''''''''
 
@@ -128,3 +126,4 @@ The above facilities can be made available to a Django_ project by adding
 setting and enabling the ``APP_DIRS`` option in the ``TEMPLATES`` setting.
 
 .. _Comet: https://en.wikipedia.org/wiki/Comet_%28programming%29
+.. _Django: https://www.djangoproject.com
