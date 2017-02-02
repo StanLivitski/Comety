@@ -44,7 +44,7 @@ renderAPI
 
 .. _renderTiming :
 renderTiming :
-		A boolean switch that requvalue ests this template to render
+		A boolean switch that requests this template to render
 		the script that takes the current timestamp and stores
 		it in the API object. The page should do tnis as early
 		as possible, before loading any external resources. When
