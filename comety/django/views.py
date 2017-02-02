@@ -584,7 +584,8 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
             if 0 > timeout: timeout = 0
         return self.cometyDispatcher.pollEvents(userId, timeout)
 
-    def heartbeat(self, userId, callback = None, networkDelay = HEARTBEAT_TIMEOUT):
+    def heartbeat(self, userId, callback = None,
+                  networkDelay = 5 * HEARTBEAT_TIMEOUT):
         """
         Set a timer to track the user's heartbeat, or stop
         an existing timer.
@@ -607,8 +608,8 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         networkDelay : float, optional
             The total number of seconds expected to be spent by the
             request and response en route through the network. Defaults
-            to `HEARTBEAT_TIMEOUT`, which doubles the effective timeout
-            when the actual delay has not yet been measured.
+            to `5 * HEARTBEAT_TIMEOUT`, which multiplies the effective timeout
+            by ``6`` when the actual delay has not yet been measured.
     
         Returns
         -------
