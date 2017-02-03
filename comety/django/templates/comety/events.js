@@ -133,8 +133,8 @@ defaults.handler(events, loopParams)
 		handler. This must be a non-negative integer not exceeding
 		the number of events passed. If the handler returns 0,
 		the notifications' loop stops to avoid endless looping.
-		Default implementation reloads the current page and returns
-		0.
+		Default implementation reloads the current page using a
+		GET request and returns 0.
 
 .. _errorHandler:
 defaults.errorHandler(jqXHR, textStatus, errorThrown, loopParams)
@@ -174,7 +174,7 @@ defaults.errorHandler(jqXHR, textStatus, errorThrown, loopParams)
 		timeout: 10,
 		handler: function(events, loopParams)
 		{
-			location.reload(true);
+			location.replace(location);
 			return 0;
 		},
 		errorHandler: function(jqXHR, textStatus, errorThrown, loopParams)
