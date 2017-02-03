@@ -662,7 +662,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
 
     def expectedDelay(self, session, latestDelay = None):
         """
-        Retrieve the expected network delay for this session and/or
+        Retrieve the expected network delay for a session and/or
         adjust it using the latest measured delay.
         
         This method should return a pessimistic estimate of network
@@ -698,6 +698,8 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         --------    
         DELAY_HISTORY_VAR : Name of the session variable used
             by this method to store delay statistics.
+        clearDelayStats: Removes the network delay statistics
+            stored in a session.
     
         Notes
         -----
@@ -737,6 +739,28 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         if delay is None:
             delay = sorted(history, reverse = True)[1]
         return delay
+
+    def clearDelayStats(self, session):
+        """
+        Remove the network delay statistics stored in a session.
+
+
+        Parameters
+        ----------
+        session : backends.base.SessionBase
+            Session that stores network delay statistics.
+    
+        See Also
+        --------    
+        DELAY_HISTORY_VAR : Name of the session variable used
+            by this method to store delay statistics.
+        expectedDelay : Retrieves the expected network delay
+            using statistics stored in a session and/or
+            adds new measurements thereto.
+        """
+
+        if self.DELAY_HISTORY_VAR in session:
+            del session[self.DELAY_HISTORY_VAR]
 
     @classmethod
     def measureDelay(cls, session, reset = False):
