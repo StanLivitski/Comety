@@ -317,7 +317,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         in the cache configured for this object or its class.
         A mapping will last until its session expires,
         plus `SESSION_KEY_CACHE_EXPIRATION_MARGIN`, but not shorter
-        than `HEARTBEAT_TIMEOUT` ``* 10 / 3`` seconds. For sessions
+        than `HEARTBEAT_TIMEOUT` ``* 10`` seconds. For sessions
         that expire on browser close, mappings will be
         cached forever.
         
@@ -360,7 +360,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
                 else session.get_expiry_age()
             if expiry is not None:
                 expiry += self.SESSION_KEY_CACHE_EXPIRATION_MARGIN(expiry)
-                lowLimit = math.ceil(self.HEARTBEAT_TIMEOUT * 10. / 3)
+                lowLimit = math.ceil(self.HEARTBEAT_TIMEOUT * 10.)
             cache.set(key, session_key, expiry if lowLimit < expiry else lowLimit)
         finally:
             cache.close()
@@ -790,6 +790,22 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
             return delay
         return None
 
+    def trackHeartbeat(self, request, measureDelay=False, expectedDelay=None):
+        try:
+            callback = self.createHeartbeatHandler()
+            if expectedDelay is None:
+                expectedDelay = self.expectedDelay(request.session)
+            if 0 < expectedDelay:
+                self.heartbeat(self._userId, callback, expectedDelay)
+            else:
+                self.heartbeat(self._userId, callback)
+        except:
+            log = logging.getLogger(type(self).__module__)
+            log.error('Error setting up heartbeat timer for user "%s" with handler %s', self._userId, None if callback is None else callback.__name__, exc_info=True)
+        finally:
+            if measureDelay:
+                self.measureDelay(request.session, True)
+
     def get(self, request, *args, **kwargs):
         """
         Handle the GET request to update a user on the Comety events.
@@ -880,14 +896,4 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
                       self._userId, exc_info=True)
             return HttpResponseServerError()
         finally:
-            try:
-                callback = self.createHeartbeatHandler()
-                self.heartbeat(self._userId, callback, expectedDelay)
-            except:
-                log = logging.getLogger(type(self).__module__)
-                log.error(
-                    'Error setting up heartbeat timer for user "%s" with handler %s',
-                    self._userId,
-                    None if callback is None else callback.__name__, exc_info=True)
-            finally:
-                self.measureDelay(request.session, True)
+            self.trackHeartbeat(request, True, expectedDelay)
