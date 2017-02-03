@@ -751,7 +751,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         argument to obtain the delay measurement (read the stopwatch).
         This usually happens early during the processing of a subsequent
         HTTP request. Then you can repeat the measurement by setting
-        a new baseline, or obtain more measurements from wthe existing
+        a new baseline, or obtain more measurements with an existing
         baseline.
         
         Parameters
