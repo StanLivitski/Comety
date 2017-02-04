@@ -206,7 +206,7 @@ class Timer:
         >>> t.start(-1)
         Traceback (most recent call last):
         ...
-        ValueError: delay -1.0 is negative
+        ValueError: delay -1 must be a finite positive number or zero
         >>> t.start('foo')
         Traceback (most recent call last):
         ...
@@ -1051,8 +1051,9 @@ class Dispatcher:
         -------
         bool | NoneType
             ``True`` if the user had an existing timer reset or canceled
-            by this call, ``False`` otherwise, ``None`` if the user was
-            un-registered before the timer could be set.
+            by this call, ``False`` otherwise; or ``None`` if the user was
+            not registered or un-registered before the timer could be
+            (re)set.
     
         Raises
         ------
@@ -1062,6 +1063,8 @@ class Dispatcher:
         ValueError
             If ``userId`` is not registered with this object,
             or has its registration revoked, or ``timeout`` is negative.
+            However, an attempt to reset the timer for a non-existent
+            user will be ignored and won't raise this error.
     
         See Also
         --------
@@ -1085,6 +1088,7 @@ class Dispatcher:
         >>> dispatcher.unregisterUser('foo')
         >>> dispatcher.discard()
         """
+
         if callback is not None:
             if not callable(callback):
                 raise TypeError('Callback of type "%s" is not callable'
@@ -1099,8 +1103,11 @@ class Dispatcher:
             with self._accessGuard:
                 userEntry = self._userEntries.get(userId)
                 timer = None if userEntry is None else userEntry[1]
-        if userEntry is None:                    
-            raise ValueError('User with id "%s" is not registered' % userId)
+        if userEntry is None:
+            if callback is None:
+                return None
+            else:
+                raise ValueError('User with id "%s" is not registered' % userId)
         if not isinstance(timer, Timer):
             raise RuntimeError(
                 'User with id "%s" has invalid timer of type "%s"' % (

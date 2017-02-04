@@ -622,6 +622,8 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         ValueError
             If ``userId`` is not registered with the dispather,
             or had its registration revoked before the timer could be set.
+            However, an attempt to stop the timer for a non-existent
+            user will be ignored and won't raise this error.
         RuntimeError
             If `cometyDispatcher` is missing.
         TypeError
