@@ -235,6 +235,7 @@ class Timer:
         True
         >>> t.discard()
         """
+
         delay = float(delay)
         if 0 > delay or not math.isfinite(delay):
             raise ValueError(
@@ -383,6 +384,7 @@ class Timer:
         RuntimeError: this timer has been discarded, cannot cancel it
         >>> t.discard()
         """
+
         if timeout is not None:
             timeout = float(timeout)
             if 0 > timeout or not math.isfinite(timeout):
@@ -398,19 +400,24 @@ class Timer:
             self._args = self._kwargs = None
             self._monitor.notify()
         if self._thread is not None:
-            self._thread.join(timeout)
-            if self._thread.is_alive():
-                raise RuntimeError(
-                   'the timer thread did not stop in %s seconds.' % timeout
-                )
+            if threading.current_thread() is self._thread:
+                # hold the monitor until the current timer thread exits its context
+                self._monitor.acquire()
             else:
-                self._thread = None
+                self._thread.join(timeout)
+                if self._thread.is_alive():
+                    raise RuntimeError(
+                       'the timer thread did not stop in %s seconds.' % timeout
+                    )
+            self._thread = None
         del self._handler
         class DummyContext:
             def __enter__(self):
                 return self
             def __exit__(self, exc_type, exc_value, traceback):
                 return False
+            def acquire(self):
+                pass
         self._monitor = DummyContext()
 
     def getState(self):
@@ -1148,6 +1155,7 @@ class Dispatcher:
         <In the doctest format, illustrate how to use this method.>
          ]
         """
+
         while True:
             with self._accessGuard:
                 while self._userEntries:
