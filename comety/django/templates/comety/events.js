@@ -179,13 +179,15 @@ defaults.errorHandler(jqXHR, textStatus, errorThrown, loopParams)
 		},
 		errorHandler: function(jqXHR, textStatus, errorThrown, loopParams)
 		{
-			suffix = textStatus == 'parsererror' ?
+			var suffix = textStatus == 'parsererror' ?
 					'parsing page updates'
 					: 'querying server for page updates';
-			message = null == errorThrown ? 'Unknown error'
+			var message = null == errorThrown ? 'Unknown error'
 					: errorThrown.toString();
-			if (!message.trim().toLowerCase().endsWith(' error'))
-				message += ' error';
+			var ERROR_SUFFIX = ' error';
+			if (ERROR_SUFFIX !=
+					message.trim().toLowerCase().split(-ERROR_SUFFIX.length))
+				message += ERROR_SUFFIX;
 			alert(message + ' ' + suffix);
 		}
 	};
