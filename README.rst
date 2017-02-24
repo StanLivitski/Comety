@@ -101,7 +101,7 @@ You must meet these dependencies to run the code in ``comety/django``:
 Browser compatibility
 '''''''''''''''''''''
 
-Comety has been designed for compatibility with the following browsers:
+*Comety* is designed for compatibility with the following browsers:
 
 +-----------------------------------------------------------+---------------+
 |  Name                                                     | Version       |
