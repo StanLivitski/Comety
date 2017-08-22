@@ -47,6 +47,7 @@
 """
 
 import abc
+import collections
 import logging
 import math
 import numbers
@@ -67,17 +68,15 @@ from django.views.generic import View
 class JSONEncoder(DjangoJSONEncoder):
     """
     A JSON encoder that knows how to sertalize
-    `comety.Dispather.Event` objects.
-    
-
-[   Examples
-    ----------------
-    <In the doctest format, illustrate how to use this class.>
-     ]
+    `collections.Iterable` and `comety.JSONSerializable`
+    objects in addition to `DjangoJSONEncoder` functionality.
     """
+
     def default(self, obj):
-        if isinstance(obj, comety.Dispatcher.Event):
-            return (str(obj.sender), obj.kwargs)
+        if isinstance(obj, comety.JSONSerializable):
+            return obj._json_data_()
+        elif isinstance(obj, collections.Iterable):
+            return tuple(obj)
         else:
             return super().default(obj)
 
@@ -533,7 +532,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
     
         Returns
         -------
-        ( int, tuple | NoneType | bool )
+        ( int, collections.Sequence | NoneType | bool )
             The value returned by ``pollEvents`` method of `comety.Dispatcher`.
     
         Raises

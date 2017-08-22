@@ -451,6 +451,32 @@ class Timer:
 
     state = property(getState)
 
+class JSONSerializable:
+    """
+    Marks an object that knows how to convert its data into
+    JSON-serializable structures.
+
+    Methods
+    ---------------
+    _json_data_()
+        Override this method to return a Python data structure
+        that can be coverted to JSON by `json.JSONEncoder`, or
+        `django.core.serializers.json.DjangoJSONEncoder` for
+        Django applications.
+    
+    See also
+    --------
+    json.JSONEncoder : defines basic data elements and structures
+        serializable into JSON
+    django.core.serializers.json.DjangoJSONEncoder : serializes
+        additional data types and structures within the Django
+        framework
+    """
+
+    def _json_data_(self):
+        raise NotImplementedError(
+            'JSON encoding not implemented for %s' % type(self)
+        )
 
 class Dispatcher:
     """
@@ -533,7 +559,7 @@ class Dispatcher:
     >>> dispatcher.discard()
     """
 
-    class Event:
+    class Event(JSONSerializable):
         """
         Container that stores information about a UI event.
         
@@ -590,6 +616,10 @@ class Dispatcher:
         def __init__(self, sender_, **kwargs_):
             self.sender = sender_
             self.kwargs = kwargs_
+
+        def _json_data_(self):
+            return (str(self.sender), self.kwargs)
+
 
     def __init__(self):
         self._lowestWindow = self._baseSeq = 1
@@ -830,10 +860,10 @@ class Dispatcher:
     
         Returns
         -------
-        ( int, tuple | NoneType | bool )
+        ( int, collections.Sequence | NoneType | bool )
             A tuple with the sequence number of the last event retrieved, or
-            first event expected minus ``1``, followed by: either a tuple with
-            new events retrieved from the queue, or an object equivalent to
+            first event expected minus ``1``, followed by: either a sequence
+            of new events retrieved from the queue, or an object equivalent to
             ``False`` when converted to a `bool` if no events were encountered
             in the allotted time.
     
@@ -872,6 +902,7 @@ class Dispatcher:
         <In the doctest format, illustrate how to use this method.>
          ]
         """
+
         if timeout is not None and (0 > timeout or not math.isfinite(timeout)):
             raise ValueError('Negative or undefined timeout value: %g' % timeout)
         userEntry, firstIndex, lastIndex, events, lastSeq = (None, )*5
@@ -908,6 +939,7 @@ class Dispatcher:
             'Event window for user id "%s" (%d) is out of sync with empty queue at %d'
             % (userId, userEntry[0], lastSeq)
         )
+        # TODO: filter events while copying based on recipients' whitelist
         return lastSeq, tuple(events[firstIndex:(lastIndex + 1)])
 
     def confirmEvents(self, userId, lastSeqConfirmed = None):
