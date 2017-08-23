@@ -75,6 +75,8 @@ class JSONEncoder(DjangoJSONEncoder):
     def default(self, obj):
         if isinstance(obj, comety.JSONSerializable):
             return obj._json_data_()
+        elif isinstance(obj, collections.Mapping):
+            return dict(obj)
         elif isinstance(obj, collections.Iterable):
             return tuple(obj)
         else:
