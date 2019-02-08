@@ -1,9 +1,9 @@
    Comety - A simple toolkit for building event-driven web applications
-   Copyright 2016 Stan Livitski
+   Copyright 2016, 2017 Stan Livitski
    http://livitski.com || https://github.com/StanLivitski
 
    Licensed under the Apache License, Version 2.0 with modifications,
-   (the "License"); you may not use this file except in compliance
+   (the "License"); you may not use this software except in compliance
    with the License. You may obtain a copy of the License at
 
     https://raw.githubusercontent.com/StanLivitski/Comety/master/LICENSE

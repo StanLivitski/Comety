@@ -1,6 +1,6 @@
 {% comment %}
 ===========================================================================
- Copyright © 2016 Stan Livitski
+ Copyright 2016, 2017 Stan Livitski
 
  This file is part of Comety. Comety is
  Licensed under the Apache License, Version 2.0 with modifications,
