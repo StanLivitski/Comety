@@ -260,6 +260,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         sessionKey : Returns the session key for a specific user. 
         dispatch : Calls this method when processing requests. 
         """
+
         pass
 
     def sessionKey(self, userIdString):
@@ -540,8 +541,8 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         Raises
         ------
         ValueError
-            If ``lastSeqConfirmed`` is negative ``maximumTimeout`` is
-            negative, infinite, or NaN, or a `ValueError` is raised by the
+            If ``lastSeqConfirmed`` is negative; ``maximumTimeout`` is
+            negative, infinite, or NaN; or a `ValueError` is raised by the
             ``pollEvents`` method of `cometyDispatcher`.
         RuntimeError
             If `cometyDispatcher` is corrupt or missing.
@@ -818,6 +819,35 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
         return None
 
     def trackHeartbeat(self, request, measureDelay=False, expectedDelay=None):
+        """
+        (Re)start the user's heartbeat timer and establish a baseline for
+        network delay measurement within the next update request. 
+        
+        
+        Parameters
+        ----------
+        request : django.http.request.HttpRequest
+            HTTP request subject to the timing operations.
+        measureDelay : bool, optional
+            A flag designating this call as the network delay
+            measurement baseline. Set this to ``True`` if the method
+            is called at the end of an HTTP request processing
+            to begin network delay measurement between the current and
+            next update requests.
+        expectedDelay : float, optional
+            The amount of time, in seconds, before this user will be
+            considered disconnected. If the delay is not explicitly
+            specified, it is computed using `expectedDelay` method.
+    
+        See Also
+        --------    
+        createHeartbeatHandler : Creates a callback that will handle
+            user's inactivity timeout.
+        expectedDelay : Retrieves the expected network delay
+            using statistics stored in the current session.
+        heartbeat : Sets timers that track the user's heartbeat. 
+        """
+
         try:
             callback = self.createHeartbeatHandler()
             if expectedDelay is None:

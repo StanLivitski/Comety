@@ -46,7 +46,7 @@ renderAPI
 renderTiming :
 		A boolean switch that requests this template to render
 		the script that takes the current timestamp and stores
-		it in the API object. The page should do tnis as early
+		it in the API object. The page should do this as early
 		as possible, before loading any external resources. When
 		the code is rendered more than once on the same page,
 		the first instance does the work, and the others are
