@@ -48,6 +48,7 @@ import version
 
 version.requirePythonVersion(3, 2)
 
+import collections
 from numbers import Number
 import math
 import threading
@@ -562,8 +563,7 @@ class Dispatcher:
     class Event(JSONSerializable):
         """
         Container that stores information about a UI event.
-        
-        TODOdoc: <Extended description>
+
         
         Parameters
         ----------
@@ -582,11 +582,10 @@ class Dispatcher:
             Key-value pairs that store any additional information about
             this event.
     
-    [    Methods
+        Methods
         ---------------
-        <name>([<param>, ...])
-            <One-line description of a method to be emphasized among many others.>
-        ...]
+        arg(name)
+            retrieves values of arguments provided when the event occurred
     
         Other parameters
         ----------------
@@ -612,14 +611,51 @@ class Dispatcher:
         <In the doctest format, illustrate how to use this class.>
          ]
         """
-        # TODO: make objects of this class immutable,
+
+        # TODO: make objects of this class immutable
+        # TODO: add positional arguments here and in `arg()`
         def __init__(self, sender_, **kwargs_):
             self.sender = sender_
             self.kwargs = kwargs_
 
         def _json_data_(self):
-            return (str(self.sender), self.kwargs)
+            sender = self.sender
+            str_num = lambda arg: None if arg is None else (
+                        arg.real if isinstance(arg, Number) else str(arg))
+            if isinstance(sender, collections.Mapping):
+                sender = dict((k, str_num(sender[k])) for k in sender)
+            elif isinstance(sender, collections.Iterable):
+                sender = tuple(str_num(k) for k in sender)
+            else:
+                sender = str_num(sender)
+            return (sender, self.kwargs)
 
+        def arg(self, name):
+            """
+            Retrieve value of an argument stored when the event occurred.
+
+            Objects of this class can have named arguments passed
+            to their constructors as additional information about an event,
+            retrievable by this method.
+           
+            Parameters
+            ----------
+            name : str
+                The name of an argument to read.
+       
+            Returns
+            -------
+            object | None
+                The argument's value, or ``None`` if the named
+                argument is missing.
+
+            See Also
+            --------    
+            kwargs : a dictionary with arguments retrievable by this
+             method
+            """
+
+            return self.kwargs.get(name)
 
     def __init__(self):
         self._lowestWindow = self._baseSeq = 1
@@ -696,11 +732,6 @@ class Dispatcher:
             event notifications from a dispatcher. 
         unregisterUser : The method that revokes user registrations
             herein.
-    
-    [   Examples
-        --------
-        <In the doctest format, illustrate how to use this method.>
-         ]
         """
 
         badId = userId in self._userEntries
@@ -763,11 +794,6 @@ class Dispatcher:
         --------    
         registerUser : The method that creates user registrations
             herein.
-    
-    [   Examples
-        --------
-        <In the doctest format, illustrate how to use this method.>
-         ]
         """
 
         entry = None
@@ -821,11 +847,6 @@ class Dispatcher:
         Dispatcher.Event : Defines objects that contain information about
             posted events on the queue. This method creates
             `Dispatcher.Event` objects for you.  
-    
-    [   Examples
-        --------
-        <In the doctest format, illustrate how to use this method.>
-         ]
         """
 
         event = self.Event(sender_, **kwargs)
@@ -837,7 +858,8 @@ class Dispatcher:
                 self._accessGuard.notify_all()
         return seq
 
-    def pollEvents(self, userId, timeout = None):
+    def pollEvents(self, userId, timeout = None,
+                    eventFilter = None, immutableFilter = False):
         """
         Poll the queue for new events on behalf of a specific user.
         
@@ -857,6 +879,25 @@ class Dispatcher:
             present on the queue. Omitting this argument allows the
             call to wait indefinitely. Zero means poll the queue
             without waiting.
+        eventFilter : collections.Callable | object, optional
+            A function, or other callable object, that is applied
+            to events on the queue to determine whether an event
+            should be included in the result. If ``eventFilter(event)``
+            returns True, ``event`` is retuned, otherwise it is omitted.
+        immutableFilter : bool, optional
+            Set this to ``True`` to allow `pollEvents` to confirm events
+            at the head of the queue that did not pass ``eventFilter``.
+            Use this flag to optimize `pollEvents` loop and subsequent
+            calls **ONLY IF** the user calls this method with the same
+            ``eventFilter`` at all times. If ``eventFilter``, or its output
+            for the same inputs, may change from one call to the other
+            and this flag is set, some relevant events may be lost. This
+            flag is ignored when ``eventFilter`` is absent. When
+            ``eventFilter`` is present and this flag is not ``True``, the
+            caller must pass a ``timeout`` value should confirm events
+            it receives on a regular basis to avoid performance
+            degradation.
+            
     
         Returns
         -------
@@ -888,7 +929,9 @@ class Dispatcher:
         -----
         To deliver events in the same order as they are posted,
         each event is assigned a sequence number. This method returns
-        events with strictly ascending sequence numbers, without gaps.
+        events with strictly ascending sequence numbers. There will
+        be no gaps in the sequence if there is no ``eventFilter`` passed,
+        or the filter function rejects no events.
         Thus, if the returned tuple contains 3 elements and the last
         reported sequence number is ``5``, then the first returned event
         has the number of ``3``, and the second has number ``4``. 
@@ -906,41 +949,57 @@ class Dispatcher:
         if timeout is not None and (0 > timeout or not math.isfinite(timeout)):
             raise ValueError('Negative or undefined timeout value: %g' % timeout)
         userEntry, firstIndex, lastIndex, events, lastSeq = (None, )*5
-        if userId in self._userEntries:
-            with self._accessGuard:
-                userEntry = self._userEntries.get(userId)
-                if userEntry is not None:
-                    firstIndex = userEntry[0] - self._baseSeq
-                    if 0 > firstIndex:
-                        raise RuntimeError (
-                            'Event window for user id "%s" (%d) is out of sync with queue start %d'
-                            % (userId, userEntry[0], self._baseSeq)
-                        )
-                    waited = False
-                    while True:
-                        if self._eventQueue:
-                            lastIndex = len(self._eventQueue) - 1
-                            lastSeq = self._baseSeq + lastIndex
-                            events = self._eventQueue
-                        else:
-                            lastSeq = self._lowestWindow - 1
-                        if waited or userEntry[0] <= lastSeq:
-                            break
-                        else:
-                            if 0 < timeout:
-                                self._accessGuard.wait(timeout)
-                            waited = True
-        if userEntry is None:                    
-            raise ValueError(
-                'User with id "%s" is not registered' % userId)
-        if userEntry[0] > lastSeq:
-            return userEntry[0] - 1, None
-        assert events is not None, (
-            'Event window for user id "%s" (%d) is out of sync with empty queue at %d'
-            % (userId, userEntry[0], lastSeq)
-        )
-        # TODO: filter events while copying based on recipients' whitelist
-        return lastSeq, tuple(events[firstIndex:(lastIndex + 1)])
+        while True:
+            startTime = time.perf_counter()
+            if userId in self._userEntries:
+                with self._accessGuard:
+                    userEntry = self._userEntries.get(userId)
+                    if userEntry is not None:
+                        firstIndex = userEntry[0] - self._baseSeq
+                        if 0 > firstIndex:
+                            raise RuntimeError (
+                                'Event window for user id "%s" (%d) is out of sync with queue start %d'
+                                % (userId, userEntry[0], self._baseSeq)
+                            )
+                        waited = False
+                        while True:
+                            if self._eventQueue:
+                                lastIndex = len(self._eventQueue) - 1
+                                lastSeq = self._baseSeq + lastIndex
+                                events = self._eventQueue
+                            else:
+                                lastSeq = self._lowestWindow - 1
+                            if waited or userEntry[0] <= lastSeq:
+                                break
+                            else:
+                                if 0 < timeout:
+                                    self._accessGuard.wait(timeout)
+                                waited = True
+            if userEntry is None:                    
+                raise ValueError(
+                    'User with id "%s" is not registered' % userId)
+            if userEntry[0] > lastSeq:
+                return userEntry[0] - 1, None
+            assert events is not None, (
+                'Event window for user id "%s" (%d) is out of sync with empty queue at %d'
+                % (userId, userEntry[0], lastSeq)
+            )
+            if eventFilter is None:
+                return lastSeq, tuple(events[firstIndex:(lastIndex + 1)])
+            else:
+                filtered = tuple(filter(eventFilter, events[firstIndex:(lastIndex + 1)]))
+                if not filtered:
+                    # none of the events matched
+                    if immutableFilter and firstIndex <= lastIndex:
+                        self.confirmEvents(userId, lastSeq) # autoconfirm if enabled
+                    if timeout is None: # retry unless timed out
+                        continue
+                    else: # update timeout before retrying to avoid excess wait
+                        elapsed = time.perf_counter() - startTime
+                        timeout -= elapsed
+                        if 0 < timeout:
+                            continue
+                return lastSeq, filtered
 
     def confirmEvents(self, userId, lastSeqConfirmed = None):
         """
@@ -981,25 +1040,8 @@ class Dispatcher:
             If the internal data structures get corrupt.
         TypeError
             If ``lastSeqConfirmed`` is not an integer.
-
-    [    See Also
-        --------    
-        <python_name> : <Description of code referred by this line
-        and how it is related to the documented code.>
-         ... ]
-    
-    [    Notes
-        -----
-        <Additional information about the code, possibly including
-        a discussion of the algorithm. Follow it with a 'References'
-        section if citing any references.>
-        ]
-    
-    [   Examples
-        --------
-        <In the doctest format, illustrate how to use this method.>
-         ]
         """
+
         if lastSeqConfirmed is None:
             with self._accessGuard:
                 lastSeqConfirmed = self._baseSeq + len(
@@ -1109,10 +1151,6 @@ class Dispatcher:
         --------
         Timer : each registered user has an instance of that class,
         which is used by this method.
-[    
-        <python_name> : <Description of code referred by this line
-        and how it is related to the documented code.>
-         ... ]
     
         Examples
         --------
@@ -1175,17 +1213,6 @@ class Dispatcher:
         known users and clearing the queue. You should not use
         this object after it's been discarded. Repeat calls of this
         method have no effect.
-    
-    [    See Also
-        --------    
-        <python_name> : <Description of code referred by this line
-        and how it is related to the documented code.>
-         ... ]
-    
-    [   Examples
-        --------
-        <In the doctest format, illustrate how to use this method.>
-         ]
         """
 
         while True:
@@ -1200,6 +1227,99 @@ class Dispatcher:
                     self._lowestWindow = self._baseSeq
                     break
             time.sleep(0.01)
+
+class FilterByTargetUser:
+    """
+    A filter for use with `Dispatcher.pollEvents` to retrieve events
+    targeted to a specific user.
+
+    Users calling `pollEvents` with this filter containing their own
+    id at all times may apply the ``
+
+    Parameters
+    --------------------
+    userId : collections.Hashable
+        Identity of the target user.
+    strictMatch : boolean, optional
+        Pass ``True`` to filter out `Event` objects that have no property
+        with name from `TARGET_USERS_KEY`, or have that property set to ``None``.
+        Defaults to ``False``, which enables all users
+        to receive such events.
+
+    Attributes
+    -----------------
+    TARGET_USERS_KEY : str
+        The name of a property within `Event` objects that contains
+        one or more ids of the target user(s). The property can be ``None``
+        or missing, in which case an `Event` is treated according to the
+        ``strictMatch`` parameter. It may also contain a single user id,
+        or zero or more user ids wrapped in a `collections.Sequence`.
+
+    Methods
+    ---------------
+    __call__(event)
+        Used by a `Dispatcher` to pass event objects to be filtered.
+
+    See Also
+    --------------
+    Dispatcher : instances of this class can be passed as the
+     ``eventFilter`` argument to ``pollEvents`` method thereof.
+    Event : objects that are filtered by this class
+
+    Examples
+    ----------------
+    >>> dispatcher = Dispatcher()
+    >>> type(dispatcher.registerUser('boo'))
+    <class 'int'>
+    >>> type(dispatcher.registerUser('hoo'))
+    <class 'int'>
+    >>> lenientFilter = FilterByTargetUser('boo')
+    >>> strictFilter = FilterByTargetUser('hoo', strictMatch=True)
+    >>> booEventId = dispatcher.postEvent('hoo', event='message', text='hello', targetUsers='boo')
+    >>> hooEventId = dispatcher.postEvent('boo', event='message', text='hi', targetUsers='hoo')
+    >>> bothEventId = dispatcher.postEvent('boo', event='message', text='hi all', targetUsers=('boo','hoo'))
+    >>> ignoreEventId = dispatcher.postEvent('boo', event='message', text='get lost', targetUsers=[])
+    >>> events = dispatcher.pollEvents('boo', 0, lenientFilter)
+    >>> len(events[1])
+    4
+    >>> max(booEventId, bothEventId) <= events[0]
+    True
+    >>> any(event.arg('text') == 'hello' for event in events[1])
+    True
+    >>> any(event.arg('text') == 'hi all' for event in events[1])
+    True
+    >>> any(event.arg('text') == 'get lost' for event in events[1])
+    False
+    >>> dispatcher.confirmEvents('boo', events[0])
+    >>> events = dispatcher.pollEvents('hoo', 0, strictFilter)
+    >>> len(events[1])
+    2
+    >>> max(hooEventId, bothEventId) <= events[0]
+    True
+    >>> any(event.arg('text') == 'hi' for event in events[1])
+    True
+    >>> any(event.arg('text') == 'hi all' for event in events[1])
+    True
+    >>> any(event.arg('text') == 'get lost' for event in events[1])
+    False
+    >>> dispatcher.confirmEvents('hoo', events[0])
+    >>> dispatcher.discard()
+    """
+
+    TARGET_USERS_KEY = 'targetUsers'
+
+    def __init__(self, userId, strictMatch = False):
+        self._userId = userId
+        self._targetPropertyMissing = not strictMatch
+
+    def __call__(self, event):
+        targetUsers = event.arg(self.TARGET_USERS_KEY)
+        if targetUsers is None:
+            return self._targetPropertyMissing
+        elif isinstance(targetUsers, collections.Sequence):
+            return self._userId in targetUsers
+        else:
+            return self._userId == targetUsers
 
 if __name__ == "__main__":
     import doctest

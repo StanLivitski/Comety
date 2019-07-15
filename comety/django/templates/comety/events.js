@@ -254,7 +254,8 @@ defaults.errorHandler(jqXHR, textStatus, errorThrown, loopParams)
 						'Could not find "events" property in the response data');
 				else
 				{
-					this._updateTimestamp = {{jq}}.now();
+					if (this._updateTimestamp != null)
+						this._updateTimestamp = {{jq}}.now();
 					if (null == data.events) 
 					{
 						if (null == this._lastReceivedId)
@@ -290,8 +291,8 @@ defaults.errorHandler(jqXHR, textStatus, errorThrown, loopParams)
 		}
 		if (null != this._lastReceivedId)
 			ajax.data.confirm = this._lastReceivedId;
-		ajax.data.elapsed = null == this._updateTimestamp ?
-			0 : ({{jq}}.now() - this._updateTimestamp) / 1000.0;
+		if (null != this._updateTimestamp)
+			ajax.data.elapsed = ({{jq}}.now() - this._updateTimestamp) / 1000.0;
 		this._jqXHR = {{jq}}.ajax(ajax);
 	};
 	if ({{api}}.startUpdates !== undefined)

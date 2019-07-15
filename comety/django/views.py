@@ -67,7 +67,7 @@ from django.views.generic import View
 
 class JSONEncoder(DjangoJSONEncoder):
     """
-    A JSON encoder that knows how to sertalize
+    A JSON encoder that knows how to serialize
     `collections.Iterable` and `comety.JSONSerializable`
     objects in addition to `DjangoJSONEncoder` functionality.
     """
@@ -90,7 +90,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
     An abstract view with infrastructure for serving
     update events to Comety-enabled web pages. Implementations
     must provide at least the `dispatcherFor` method that
-    locate a Comety dispatcher for a request. By default,
+    locates a Comety dispatcher for a request. By default,
     this class allows only GET requests to its derived views.
     To enable other request types (e.g. POST for asynchronous
     push updates), change the ``http_method_names``
