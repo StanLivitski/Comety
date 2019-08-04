@@ -564,6 +564,9 @@ class Dispatcher:
         """
         Container that stores information about a UI event.
 
+        JSON representation of the objects of this type seen by
+        the web clients is an array of two elements: the ``sender_``
+        object and ``kwargs``.
         
         Parameters
         ----------
