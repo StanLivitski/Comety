@@ -77,6 +77,8 @@ class JSONEncoder(DjangoJSONEncoder):
             return obj._json_data_()
         elif isinstance(obj, collections.Mapping):
             return dict(obj)
+        elif obj == str(obj):
+            return str(obj)
         elif isinstance(obj, collections.Iterable):
             return tuple(obj)
         else:
@@ -188,6 +190,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
     """
 
     http_method_names = [ 'get' ]
+    notify_others_on_disconnect = False
 
     RESPONSE_TIMEOUT_FACTOR = 0.5
     HEARTBEAT_TIMEOUT = 10
@@ -496,7 +499,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
                     cancel = True
             if not cancel:
                 try:
-                    comety.unregisterUser(userId)
+                    comety.unregisterUser(userId, self.notify_others_on_disconnect)
                 except:
                     if log is None:
                         log = logging.getLogger(type(self).__module__)
