@@ -35,8 +35,8 @@
     ------------
     Dispatcher : Queues events for delivery to the browsers of Comety
         pages and detects client connection timeouts.
-    Timer : A thread-based class that augments `threading.Timer` with
-        stop and reset functions.
+    MultiTimer : Reusable timer with an internal thread that runs
+        user-supplied tasks no sooner than their scheduled times.
     django : Elements of the Comety toolkit that depend on the
         Django_ framework.
 
@@ -46,411 +46,404 @@
 
 import version
 
-version.requirePythonVersion(3, 2)
+version.requirePythonVersion(3, 3)
 
 import collections
 from numbers import Number
 import math
 import threading
 import time
+from sched import scheduler
 import sys
 
-class Timer:
+class MultiTimer:
     """
-    Reusable timer with an internal thread that runs a
-    user-supplied handler function.
-    
-    Each object of this class runs an internal thread that waits for
-    a certain time and than runs a user-supplied `handler` function,
-    if any, and changes its internal `status`. Before the timer goes
-    off, the object may be asked to `cancel` it. After the timer goes
-    off, or is cancelled, it may be reset to run the same or different
-    `handler` function again at some time in future. This class
-    implements the context manager protocol to allow locking the timer
-    using ``with`` statement as it is being manipulated.
-    
-    Parameters
-    --------------------
-    handler : collections.Callable | object, optional
-        A callable object that will be called when the timer goes off.
+    Reusable timer with an internal thread that runs
+    user-supplied tasks no sooner than their scheduled times.
+
+    Maintains a thread that runs callables with optional
+    arguments no sooner then a certain time after they are
+    scheduled. The thread and scheduler are created with this
+    object and live until it is `shutdown`, usually along
+    with the host application. 
 
     Attributes
-    -----------------
-    state
-    error : BaseException
-        Any uncaught exception that occurred in the `handler` last time
-        it was run, otherwise ``None``.
-
-    Methods
-    ---------------
-    start(delay,handler,args,kwargs)
-        Activate the timer and allow the caller to change the handler.
-    cancel()
-        Stop the timer if it is active.
-    discard()
-        Dispose of the internal thread and objects used to synchronize
-        this timer. 
-
-    Raises
     ----------
-    TypeError
-        If the supplied `handler` object is not callable.
+    Task
+    
+    Methods
+    -------
+    start(delay, action)
+        Start a new timer and allow the caller to further query
+        or cancel it.
+    shutdown(graceful)
+        Run all scheduled tasks now, if ``graceful`` flag is set,
+        then stop the internal thread and dispose of objects used to
+        implement this timer.
 
     Examples
     ----------------
-    >>> Timer(1)
-    Traceback (most recent call last):
-    ...
-    TypeError: type "int" is not callable
-    >>> t=Timer(print)
-    >>> t.state
-    'idle'
     >>> import time
-    >>> t.start(.2, args=['wake up!'])
-    >>> t.state
-    'started'
-    >>> time.sleep(.25)
-    wake up!
-    >>> t.state
-    'idle'
-    >>> t.error is None
+    >>> t=MultiTimer()
+    >>> started=time.time()
+    >>> def ptime():
+    ...  t = time.time()
+    ...  print('ptime')
+    ...  return t - started
+    >>> task = t.start(.5, ptime)
+    >>> task.status
+    'pending'
+    >>> time.sleep(.6)
+    ptime
+    >>> task.status
+    'done'
+    >>> type(task.result)
+    <class 'float'>
+    >>> task.result >= .5
     True
-    >>> t.start(.2, args=['wake up!'])
-    >>> t.state
-    'started'
-    >>> t.cancel()
-    >>> t.state
-    'idle'
-    >>> t.start(0, all)
-    >>> time.sleep(.15)
-    >>> t.state
-    'idle'
-    >>> t.error
-    TypeError('all() takes exactly one argument (0 given)',)
-    >>> t.discard()
-    >>> t.state
-    'discarded'
+    >>> t.shutdown(False, .01)
     """
 
-    def __init__(self, handler = None):
-        if handler is not None and not callable(handler):
-            raise TypeError('type "%s" is not callable' % type(handler).__name__)
+    def __init__(self):
         self._monitor = threading.Condition(threading.RLock())
-        self._thread = None
-        self._handler = handler
-        self._state = 'idle'
-        self.error = None
+        self._shutdown = None
+        self._scheduler = scheduler(delayfunc = lambda s: None)
+        def schedulerThread():
+            nonlocal self
+            with self._monitor:
+                while self._shutdown is None:
+                    wait = None
+                    if not self._scheduler.empty():
+                        wait = self._scheduler.run(blocking = False)
+                    if self._shutdown is None:
+                        self._monitor.wait(wait)
+                if self._shutdown:
+                    queue = self._scheduler.queue
+                    self._monitor.release()
+                    for pending in queue:
+                        action, args, kwargs = pending[2:]
+                        try:
+                            action(*args, **kwargs)
+                        except:
+                            pass
+                        if not self._shutdown:
+                            break
+                    self._monitor.acquire()
+                    self._thread = self._monitor = self._scheduler = None
+            # Releasing former self._monitor and exiting schedulerThread
+        self._thread = threading.Thread(
+            target=schedulerThread,
+            name=type(self).__name__
+        )
+        self._thread.daemon = True
+        self._thread.start()
 
-    def __enter__(self):
-        self._monitor.acquire()
+    def _cancel(self, task):
+        with self._monitor:
+            if 'pending' != task.status:
+                return
+            elif self._shutdown is not None:
+                raise MultiTimer.ShutdownError(
+                    'Cannot cancel task: the timer is shutting down')
+            self._scheduler.cancel(task._event)
+            task.status = 'aborted'
+            self._monitor.notify()
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self._monitor.release()
-
-    def start(self, delay, handler = None, args = (), kwargs = {}):
+    def start(self, delay, action):
         """
-        Activate the timer and set the delay after which it'll go off.
-
-        If the object is ``'idle'``, calling this method moves it to the
-        ``'started'`` state and clears the `error` attribute. It also
-        activates a background thread that will wait for a specified time,
-        then switch the object back to the ``'idle'`` state and call any
-        `handler` with optional arguments passed to this method. If a
-        handler is passed to this method, it overrides the constructor's
-        argument.
+        Start a new timer and allow the caller to further query
+        or cancel it.
+        
+        All scheduled actions run in the same thread, and the timer
+        object is locked while they run. Thus, they are expected to
+        finish quickly. They may schedule or cancel other tasks
+        with this timer as long as they are doing that in the
+        same thread. However, an action attempting to schedule or
+        cancel tasks during the timer's shutdown will raise a
+        `MultiTimer.ShutdownError`, and is expected to handle it.
         
         Parameters
         ----------
-        delay : int | float | str
-            The number of seconds, or fractions thereof, to wait on the
-            background before performing the scheduled action.
-        handler : collections.Callable | object | None, optional
-            A callable object that will be called when the timer goes off.
-            If ``None`` is passed, then the handler supplied to the most
-            recent `start` invocation, if any, or this object's
-            constructor otherwise, will be called.
+        action : collections.Callable | object | tuple, optional
+            Function or object that will be called when the delay time
+            runs out. This may also be a collection with elements
+            (callable, args, kwargs) if the action requires running a
+            function with arguments. Last element of the collection
+            may be omitted.
     
-        Other parameters
-        ----------
-        args : collections.Iterable, optional
-            Positional arguments, if any, to be passed to the `handler`
-            when it is called.
-        kwargs : collections.Mapping, optional
-            Keyword arguments, if any, to be passed to the `handler`
-            when it is called.
+        Returns
+        -------
+        MultiTimer.Task
+            A handle for querying or canceling the new task.
     
         Raises
         ------
         TypeError
-            If the supplied `handler` object is not callable, 
-        ValueError
-            If `delay` is negative or cannot be converted to
-            a number.
-        RuntimeError
-            If this timer is already started, or has been discarded. 
-    
-        See Also
-        --------    
-        state : The current state of this object.
+            If the supplied `action` object, or its first element,
+            is not callable.
+        MultiTimer.ShutdownError
+            If the host timer is being shut down.        
     
         Examples
         --------
-        >>> t=Timer()
         >>> import time
-        >>> t.start(.1, print, ['wake up!'])
-        >>> t.state
-        'started'
-        >>> time.sleep(.15)
-        wake up!
-        >>> t.state
-        'idle'
-        >>> t.start(-1)
-        Traceback (most recent call last):
-        ...
-        ValueError: delay -1 must be a finite positive number or zero
-        >>> t.start('foo')
-        Traceback (most recent call last):
-        ...
-        ValueError: could not convert string to float: 'foo'
-        >>> t.start(1,'foo')
-        Traceback (most recent call last):
-        ...
-        TypeError: type "str" is not callable
-        >>> t.state
-        'idle'
-        >>> def repeat(interval_, call_, *args, _skip=True, **kwargs):
-        ...  if not _skip:
-        ...   call_(*args, **kwargs)
-        ...  kwargs.update(_skip=False)
-        ...  t.start(interval_, repeat, (interval_,call_)+args, kwargs)
-        >>> repeat(.33, print, ':)', end='')
-        >>> t.state
-        'started'
-        >>> time.sleep(1)
-        :):):)
-        >>> t.start(1, print)
-        Traceback (most recent call last):
-        ...
-        RuntimeError: this timer has been started, cannot start it again
-        >>> t.error is None
+        >>> t=MultiTimer()
+        >>> class foo:
+        ...  def __call__(self, what = 'response'):
+        ...    if isinstance(what, BaseException):
+        ...        raise what
+        ...    else:
+        ...        return what
+        >>> foo = foo()
+        >>> tasks = (t.start(.1, foo),
+        ...        t.start(.3, [ foo, (Exception('just testing'),) ]),
+        ...        t.start(.5, ( foo, [], { 'what': 11 })),
+        ...        t.start(1, foo)
+        ...        )
+        >>> any(task.status != 'pending' for task in tasks)
+        False
+        >>> time.sleep(.2)
+        >>> [ task.status for task in tasks ]
+        ['done', 'pending', 'pending', 'pending']
+        >>> tasks[0].result
+        'response'
+        >>> time.sleep(.2)
+        >>> [ task.status for task in tasks ]
+        ['done', 'aborted', 'pending', 'pending']
+        >>> tasks[1].result
+        Exception('just testing',)
+        >>> time.sleep(.2)
+        >>> [ task.status for task in tasks ]
+        ['done', 'aborted', 'done', 'pending']
+        >>> tasks[2].result
+        11
+        >>> tasks[3].cancel()
+        >>> [ task.status for task in tasks ]
+        ['done', 'aborted', 'done', 'aborted']
+        >>> tasks[3].result is None
         True
-        >>> t.discard()
+        >>> t.shutdown()
         """
-
-        delay = float(delay)
-        if 0 > delay or not math.isfinite(delay):
-            raise ValueError(
-                'delay %g must be a finite positive number or zero' % delay)
-        if handler is None:
-            pass
-        elif not callable(handler):
-            raise TypeError('type "%s" is not callable' % type(handler).__name__)
-        def reusableTimer():
-            nonlocal self
-            with self._monitor:
-                while True:
-                    if self._state == 'idle':
-                        self._monitor.wait()
-                    elif self._state == 'started':
-                        if not self._monitor.wait(self._delay) and self._state == 'started':
-                            self._state = 'idle'
-                            if self._handler is not None:
-                                handler, args, kwargs = (
-                                     self._handler, self._args, self._kwargs )
-                                self._args, self._kwargs, error = (None,) * 3
-                                self._monitor.release()
-                                try:
-                                    handler(*args, **kwargs)
-                                except:
-                                    error = sys.exc_info()[1]
-                                finally:
-                                    self._monitor.acquire()
-                                    self.error = error
-                                    del error
-                    else:
-                        break
         with self._monitor:
-            if self._state != 'idle':
-                raise RuntimeError(
-                   'this timer has been %s, cannot start it again' % self._state)
-            if handler is not None:
-                self._handler = handler
-            self.error = None
-            if self._thread is None:
-                self._thread = threading.Thread(
-                    target=reusableTimer,
-                    name=type(self).__name__
-                )
-                self._thread.daemon = True
-                self._thread.start()
-            self._delay = delay
-            self._args = args
-            self._kwargs = kwargs
-            self._state = 'started'
+            if self._shutdown is not None:
+                raise MultiTimer.ShutdownError(
+                    'Cannot schedule task: the timer is shutting down')
+            task = self.Task(self, delay, action)
             self._monitor.notify()
+            return task
+           
 
-    def cancel(self):
+    def shutdown(self, graceful = True, timeout = None):
         """
-        Stop the timer if it is active.
+        Stop the internal thread and dispose of objects used to
+        implement this timer.
         
-        If the object is in the ``'started'`` `state`, this method
-        cancels any pending action and changes its state to ``'idle'``.
-        If the object is in the ``'idle'`` `state`, this method does
-        nothing.
-    
-        See Also
-        --------    
-        state : The current state of this object.
-    
-        Raises
-        ------
-        RuntimeError
-            If this timer has been discarded. 
-    
-        Examples
-        --------
-        >>> t=Timer()
-        >>> t.start(.1, print, ['wake up!'])
-        >>> t.state
-        'started'
-        >>> t.cancel()
-        >>> t.state
-        'idle'
-        >>> import time
-        >>> time.sleep(.35) 
-        >>> t.cancel()
-        >>> t.state
-        'idle'
-        >>> t.discard()
-        """
-        with self._monitor:
-            if self._state == 'idle':
-                pass
-            elif self._state == 'started':
-                self._state = 'idle'
-                self._args = self._kwargs = None
-                self._monitor.notify()
-            else:
-                raise RuntimeError(
-                   'this timer has been %s, cannot cancel it' % self._state)
-
-    def discard(self, timeout=.5):
-        """
-        Dispose of the internal thread and objects used to synchronize
-        this timer.
+        If ``graceful`` flag is set, runs all scheduled tasks
+        immediately before releasing resources. This method may
+        be called from the internal thread (i.e. by one of the
+        scheduled actions), in which case it either returns
+        immediately after switching the timer into the shutdown
+        mode, or calls `sys.exit` to interrupt the current task.
         
-        Call this method to free up resources taken by this timer when
-        it is no longer needed. The call will cancel any pending `handler`
-        call, change this object's `state` to ``'discarded'``, and prevent
-        it from scheduling any further actions. However, you will still be
-        able to read the `error` attribute after it returns. Repeat calls
-        of this method do nothing.
-
         Parameters
         ----------
-        timeout : int | float | str | NoneType
-            The number of seconds, or fractions thereof, to wait for the
-            timer thread to stop, or ``None`` to wait indefinitely.
+        graceful : boolean, optional
+            Requests a graceful shutdown, which means all tasks
+            scheduled for the future are run as soon as the
+            internal thread becomes available, in the order they
+            were scheduled, but without waiting for their designated
+            times. Tasks cannot be scheduled or canceled during
+            shutdown. Defaults to ``True``.
+        timeout : float, optional
+            Timeout for the operation in seconds. This includes
+            the time needed to run remaining tasks as part of a
+            graceful shutdown. If omitted or ``None``, the operation
+            will block until the internal thread terminates. If
+            the timeout expires during shutdown, `MultiTimer.ShutdownError`
+            is raised. Ignored when method is called from the
+            internal thread of this timer.
     
         Raises
         ------
-        RuntimeError
-            If the timer thread fails to stop within the `timeout`.
-        ValueError
-            If `timeout` is negative or cannot be converted to
-            a number.
+        TypeError
+            If ``None`` is passed as the argument.
+        ShutdownError
+            If the timeout was specified and expired before shutdown
+            completed. You can re-try calling this method with or without
+            a timeout after catching this error.
     
         See Also
         --------    
-        state : The current state of this object.
+        ShutdownError : Sent to an action that attempts to modify the
+         task queue during shutdown.
     
         Examples
-        --------
-        >>> t=Timer()
-        >>> t.start(.1, print, ['wake up!'])
-        >>> t.state
-        'started'
-        >>> t.discard()
-        >>> t.state
-        'discarded'
+        ----------------
+        >>> import threading
         >>> import time
-        >>> time.sleep(.2)
-        >>> t.start(1)
+        >>> threads = threading.active_count()
+        >>> t=MultiTimer()
+        >>> threading.active_count() - threads
+        1
+        >>> t.shutdown(None)
         Traceback (most recent call last):
         ...
-        RuntimeError: this timer has been discarded, cannot start it again
-        >>> t.cancel()
+        TypeError: None is not allowed here.
+        >>> t.shutdown(False, .1)
+        >>> threading.active_count() - threads
+        0
+        >>> t=MultiTimer()
+        >>> threading.active_count() - threads
+        1
+        >>> task = t.start(.3, (time.sleep, (.5,)))
+        >>> task.status
+        'pending'
+        >>> t.shutdown(True, .1)
         Traceback (most recent call last):
         ...
-        RuntimeError: this timer has been discarded, cannot cancel it
-        >>> t.discard()
+        MultiTimer.ShutdownError: Shutdown timed out
+        >>> task.status
+        'running'
+        >>> t.shutdown(False, .1)
+        Traceback (most recent call last):
+        ...
+        MultiTimer.ShutdownError: Shutdown timed out
+        >>> t.shutdown(False, .4)
+        >>> task.status
+        'done'
+        >>> threading.active_count() - threads
+        0
+        >>> def doo(wait, action, *args):
+        ...  time.sleep(wait)
+        ...  return action(*args)
+        >>> t=MultiTimer()
+        >>> threading.active_count() - threads
+        1
+        >>> tasks = (t.start(.3, (doo, (.1, print, 'slept .2 sec'))),
+        ...            t.start(0, (doo, (.1, t.shutdown, True, 3))),
+        ...            t.start(.2, (t.shutdown, (False, 5))))
+        >>> tasks[0].status
+        'pending'
+        >>> tasks[2].status
+        'pending'
+        >>> time.sleep(.15)
+        >>> [ task.status for task in tasks ]
+        ['pending', 'done', 'aborted']
+        >>> threading.active_count() - threads
+        0
+        >>> [ type(task.result).__name__ for task in tasks ]
+        ['NoneType', 'NoneType', 'SystemExit']
         """
-
-        if timeout is not None:
-            timeout = float(timeout)
-            if 0 > timeout or not math.isfinite(timeout):
-                raise ValueError(
-                    'Thread disposal timeout %g must'
-                    ' be a finite positive number or zero'
-                    % timeout
-                )
+        if graceful is None:
+            raise TypeError('None is not allowed here.')
         with self._monitor:
-            if self._state == 'discarded':
-                return
-            self._state = 'discarded'
-            self._args = self._kwargs = None
-            self._monitor.notify()
-        if self._thread is not None:
-            if threading.current_thread() is self._thread:
-                # hold the monitor until the current timer thread exits its context
-                self._monitor.acquire()
-            else:
-                self._thread.join(timeout)
-                if self._thread.is_alive():
-                    raise RuntimeError(
-                       'the timer thread did not stop in %s seconds.' % timeout
-                    )
-            self._thread = None
-        del self._handler
-        class DummyContext:
-            def __enter__(self):
-                return self
-            def __exit__(self, exc_type, exc_value, traceback):
-                return False
-            def acquire(self):
-                pass
-        self._monitor = DummyContext()
+            if self._shutdown is None:
+                self._shutdown = graceful
+                self._monitor.notify()
+        if self._thread is threading.current_thread():
+            with self._monitor:
+                self._shutdown = self._shutdown and graceful
+                if not self._shutdown:
+                    sys.exit(-1) 
+        elif self._thread is not None:
+            self._thread.join(timeout)
+            if self._thread and self._thread.is_alive():
+                raise MultiTimer.ShutdownError('Shutdown timed out')
 
-    def getState(self):
+    class ShutdownError(RuntimeError):
         """
-        The current state of this object.
+        Raised when the caller attempts to modify the
+        task queue during timer shutdown.
+        """
 
-        This attribute can take one of the following values:
+    class Task:
+        """
+        A handle for querying or canceling scheduled tasks.
         
-        - ``'idle'`` when the object has just been created, or
-          finished a scheduled action, and is ready to schedule a
-          new action
-        - ``'started'`` when the object has an action scheduled for
-          the future
-        - ``'discarded'`` when the object has been disposed of and can
-          no longer be used
+        You shouldn't create these objects directly,
+        but obtain them from a `MultiTimer` object instead.
+        Neither should you call these objects, as `MultiTimer`
+        will do that for you. The attributes provide information
+        about a task and shouldn't be modified externally.
+        The ``cancel()`` method cancels a pending task. 
+        
+        Attributes
+        ----------
+        action : tuple
+            A tuple with elements (callable, args, kwargs) describing 
+            the scheduled action and its arguments.
+        time : float
+            The time for which the action was scheduled in units of the
+            default `sched.scheduler` ``timefunc`` function's return value.
+        status : ``'pending'`` | ``'running'`` | ``'done'`` | ``'aborted'``
+            The status of this task.
+        result : object | BaseException | NoneType 
+            The return value of this task's action if the task is in the
+            ``'done'`` status; any exception that action raised if the task
+            is ``'aborted'``; or ``None`` if the task is ``'pending'``
+            or ``'running'``.
     
-        Returns
+        Methods
         -------
-        {'idle', 'started', 'discarded'}
-            The current state of this object.
+        cancel()
+            Cancel the pending task.
     
         See Also
-        --------    
-        start : Moves an ``'idle'`` timer object to the ``'started'``
-                state.
-        cancel : Moves a ``'started'`` timer object to the ``'idle'``
-                 state and cancels pending action.
-        discard : Moves a timer object to the ``'discarded'`` state.
+        --------------
+        MultiTimer.start : Schedules a task in the timer thread and
+         returns an object of this type.
         """
-        return self._state     
 
-    state = property(getState)
+        def __init__(self, timer, delay, action):
+            if not isinstance(action, collections.Collection):
+                action = (action, (), {})
+            if not 1 < len(action) <= 3:
+                raise ValueError('Action tuple has unsupported'
+                                 ' element count %d' % len(action))
+            elif len(action) < 3:
+                action = tuple(action) + ({},)
+            if not callable(action[0]):
+                raise TypeError('type "%s" is not callable' % type(action[0]).__name__)
+            elif not isinstance(action, tuple):
+                action = tuple(action)
+            self._action = action
+            self.status = 'pending'
+            self.result = None
+            self._timer = timer
+            self._event = timer._scheduler.enter(delay, 0, self)
+
+        def cancel(self):
+            """
+            Cancel the pending task. The task transitions into the
+            ``'aborted'`` status, while its result remains ``None``.
+            The call has no effect if the task is not ``'pending'``.
+
+            Raises
+            ------
+            MultiTimer.ShutdownError
+                If the host timer is being shut down.        
+            """
+            self._timer._cancel(self)
+
+        def __call__(self):
+            assert self.status == 'pending'
+            self.status = 'running'
+            try:
+                action, args, kwargs = self._action
+                self.result = action(*args, **kwargs)
+            except:
+                self.status = 'aborted'
+                self.result = sys.exc_info()[1]
+            else:
+                self.status = 'done'
+
+        @property
+        def time(self):
+            return self._event.time
+
+        @property
+        def action(self):
+            return self._action
 
 class JSONSerializable:
     """
@@ -489,8 +482,10 @@ class Dispatcher:
     clients, and maintains optional heartbeat timers to handle
     timeouts of client connections.
 
-[    Attributes
-    -----------------
+    Attributes
+    ----------
+    timer
+    [
     <name_of_a_property_having_its_own_docstring> # or #
     <var>[, <var>] : <type | value-list>
         <Description of an attribute>
@@ -660,7 +655,7 @@ class Dispatcher:
 
             return self.kwargs.get(name)
 
-    def __init__(self):
+    def __init__(self, timer = None):
         self._lowestWindow = self._baseSeq = 1
         # for now, lock _accessGuard when updating the above 
         self._userEntries = dict() # of [ window, timer ]
@@ -675,6 +670,8 @@ class Dispatcher:
         # locked. 
         self._eventQueueBeingPurged = False
         self._accessGuard = threading.Condition()
+        self._timer = MultiTimer() if timer is None else timer
+        self._sharedTimer = timer is not None
 
     EVENT_TYPE_KEY = 'event'
     REGISTER_USER_EVENT_TYPE = 'register-user'
@@ -695,6 +692,14 @@ class Dispatcher:
     An integer greater than 0 that equals the smallest size of the
     queue that may be purged by `confirmEvents`().
     """
+
+    @property
+    def timer(self):
+        """
+        A `MultiTimer` object used to schedule users' timeouts
+        and perform maintenance.
+        """
+        return self._timer
 
     def registerUser(self, userId, notifyUsers = True):
         """
@@ -739,7 +744,7 @@ class Dispatcher:
 
         badId = userId in self._userEntries
         if not badId:
-            entry = [ None, Timer() ]
+            entry = [ None, None ]
             with self._accessGuard:
                 if userId in self._userEntries:
                     badId = True
@@ -815,7 +820,8 @@ class Dispatcher:
             else:
                 return None
         finally:
-            entry[1].discard()
+            if entry[1]:
+                entry[1].cancel()
 
     def postEvent(self, sender_, **kwargs):
         """
@@ -1152,8 +1158,7 @@ class Dispatcher:
     
         See Also
         --------
-        Timer : each registered user has an instance of that class,
-        which is used by this method.
+        timer : shared facility for scheduling users' timeouts 
     
         Examples
         --------
@@ -1182,30 +1187,29 @@ class Dispatcher:
         if userId in self._userEntries:
             with self._accessGuard:
                 userEntry = self._userEntries.get(userId)
-                timer = None if userEntry is None else userEntry[1]
+                task = None if userEntry is None else userEntry[1]
         if userEntry is None:
             if callback is None:
                 return None
             else:
                 raise ValueError('User with id "%s" is not registered' % userId)
-        if not isinstance(timer, Timer):
-            raise RuntimeError(
-                'User with id "%s" has invalid timer of type "%s"' % (
-                userId, type(timer).__name__))
-        with timer:
-            status = None
-            if 'started' == timer.state:
-                timer.cancel()
+        status = None
+        if not task:
+            status = False
+        else:
+            if 'pending' == task.status:
+                task.cancel()
+                userEntry[1] = None
                 status = True
-            elif 'idle' == timer.state:
-                status = False
-            else:
+            elif 'aborted' == task.status and task.result is None:
                 # The timer has been concurrently discarded,
                 # which means that user is no longer registered
                 callback = None
-            if callback is not None:
-                timer.start(timeout, callback, (userId,))
-            return status
+            else:
+                status = False
+        if callback is not None:
+            userEntry[1] = self.timer.start(timeout, (callback, (userId,))) 
+        return status
 
     def discard(self):
         """
@@ -1222,14 +1226,17 @@ class Dispatcher:
             with self._accessGuard:
                 while self._userEntries:
                     entry = self._userEntries.popitem()
-                    assert isinstance(entry[1][1], Timer)                    
-                    entry[1][1].discard()
+                    if entry[1][1]:
+                        assert isinstance(entry[1][1], MultiTimer.Task)                    
+                        entry[1][1].cancel()
                 if not self._eventQueueBeingPurged:
                     self._baseSeq += len(self._eventQueue)
                     self._eventQueue = []
                     self._lowestWindow = self._baseSeq
                     break
             time.sleep(0.01)
+        if not self._sharedTimer:
+            self._timer.shutdown()
 
 class FilterByTargetUser:
     """

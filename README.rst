@@ -75,7 +75,7 @@ Core dependencies
 +-----------------------------------------------------------+---------------+
 |  Name / Download URL                                      | Version       |
 +===========================================================+===============+
-| | Python                                                  | 3.2 or newer  |
+| | Python                                                  | 3.3 or newer  |
 | | https://www.python.org/downloads/ or an OS distribution |               |
 +-----------------------------------------------------------+---------------+
 | | ``python-runtime`` package                              | any available |

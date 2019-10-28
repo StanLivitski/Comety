@@ -193,13 +193,16 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
     notify_others_on_disconnect = False
 
     RESPONSE_TIMEOUT_FACTOR = 0.5
-    HEARTBEAT_TIMEOUT = 10
+    HEARTBEAT_TIMEOUT = 15
     DELAY_HISTORY_VAR = 'comety.delay.history'
     DELAY_SINCE_VAR = 'comety.delay.since'
     USER_TIMEOUT_SIGNAL = Signal(providing_args = ['cometyDispatcher', 'userId'])
     SESSION_KEY_CACHE_ALIAS = 'default'
     SESSION_KEY_CACHE_PREFIX = locals()['__module__'] + '.sessions.byuserid.'
-    SESSION_KEY_CACHE_EXPIRATION_MARGIN = lambda self, t: round(t / 10) if t > 50 else 5 
+
+    @staticmethod
+    def SESSION_KEY_CACHE_EXPIRATION_MARGIN(t):
+        return round(t / 10) if t > 50 else 5 
 
     @abc.abstractmethod
     def cometyDispatcherFor(self, request, *args, **kwargs):
@@ -266,7 +269,8 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
 
         pass
 
-    def sessionKey(self, userIdString):
+    @classmethod
+    def sessionKey(class_, userIdString):
         """
         Return the session key for a specific user.
         
@@ -307,14 +311,15 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
          ]
         """
 
-        key = self.SESSION_KEY_CACHE_PREFIX + userIdString
-        cache = django.core.cache.caches[self.SESSION_KEY_CACHE_ALIAS]
+        key = class_.SESSION_KEY_CACHE_PREFIX + userIdString
+        cache = django.core.cache.caches[class_.SESSION_KEY_CACHE_ALIAS]
         try:
             return cache.get(key)
         finally:
             cache.close()
 
-    def updateSessionKey(self, userIdString, session):
+    @classmethod
+    def updateSessionKey(class_, userIdString, session):
         """
         Update the session key for a specific user.
         
@@ -357,20 +362,21 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
                 'Object of type %s is not a session'
                 % type(session).__name__
             )
-        key = self.SESSION_KEY_CACHE_PREFIX + userIdString
+        key = class_.SESSION_KEY_CACHE_PREFIX + userIdString
         session_key = session.session_key
-        cache = django.core.cache.caches[self.SESSION_KEY_CACHE_ALIAS]
+        cache = django.core.cache.caches[class_.SESSION_KEY_CACHE_ALIAS]
         try:
             expiry = None if session.get_expire_at_browser_close() \
                 else session.get_expiry_age()
             if expiry is not None:
-                expiry += self.SESSION_KEY_CACHE_EXPIRATION_MARGIN(expiry)
-                lowLimit = math.ceil(self.HEARTBEAT_TIMEOUT * 10.)
+                expiry += class_.SESSION_KEY_CACHE_EXPIRATION_MARGIN(expiry)
+                lowLimit = math.ceil(class_.HEARTBEAT_TIMEOUT * 10.)
             cache.set(key, session_key, expiry if lowLimit < expiry else lowLimit)
         finally:
             cache.close()
 
-    def sessionByUser(self, userIdString):
+    @classmethod
+    def sessionByUser(class_, userIdString):
         """
         Retrieve the session object for a specific user.
         
@@ -409,7 +415,7 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
          ]
         """
 
-        session_key = self.sessionKey(userIdString)
+        session_key = class_.sessionKey(userIdString)
         if session_key is None:
             raise KeyError(
                'No mapping for user "%s" in the session id cache'
