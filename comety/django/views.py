@@ -371,7 +371,8 @@ class ViewWithEvents(View, metaclass=abc.ABCMeta):
             if expiry is not None:
                 expiry += class_.SESSION_KEY_CACHE_EXPIRATION_MARGIN(expiry)
                 lowLimit = math.ceil(class_.HEARTBEAT_TIMEOUT * 10.)
-            cache.set(key, session_key, expiry if lowLimit < expiry else lowLimit)
+            cache.set(key, session_key,
+                       expiry if expiry is None or lowLimit < expiry else lowLimit)
         finally:
             cache.close()
 
